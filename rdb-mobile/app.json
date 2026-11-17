@@ -1,0 +1,8 @@
+{
+  "expo": {
+    "name": "RDB Mobile", "slug": "rdb-mobile", "version": "1.0.0", "orientation": "portrait",
+    "userInterfaceStyle": "dark", "assetBundlePatterns": ["**/*"],
+    "android": {"package":"fr.rdb.mobile", "versionCode":1},
+    "ios": {"bundleIdentifier":"fr.rdb.mobile"}
+  }
+}
