@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -17,24 +17,76 @@ import {
   runningSentence,
 } from "../api/weather";
 import { theme } from "../theme";
+import { useProfile } from "../data/useProfile";
+
+// Noms de colonne possibles pour la ville dans la table profile
+const CITY_KEYS = ["city", "ville", "town", "home_city", "location"];
+
+function cityFromProfile(values: Record<string, any>): string {
+  for (const key of CITY_KEYS) {
+    const v = values?.[key];
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return "";
+}
+
+// Noms de colonne possibles pour le seuil AQI dans la table profile
+const AQI_KEYS = ["aqi", "max_aqi", "aqi_max", "aqi_threshold", "aqi_limit"];
+
+function aqiFromProfile(values: Record<string, any>): number | null {
+  for (const key of AQI_KEYS) {
+    const v = values?.[key];
+    if (v === null || v === undefined || v === "") continue;
+    const n = Number(v);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
 export default function WeatherScreen() {
-  const [city, setCity] = useState("Paris"),
+  // paused = true : le profil est chargé une fois, sans rafraîchissement toutes les 15 s
+  const { profile } = useProfile(15000, true);
+  const [city, setCity] = useState(""),
     [report, setReport] = useState<CityReport | null>(null),
     [loading, setLoading] = useState(false),
     [error, setError] = useState("");
-  const search = async () => {
-    if (!city.trim()) return;
+  const userTouched = useRef(false);
+
+  const runSearch = useCallback(async (name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
     Keyboard.dismiss();
     setLoading(true);
     setError("");
     try {
-      setReport(await getCityReport(city.trim()));
+      setReport(await getCityReport(trimmed));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Erreur météo");
     } finally {
       setLoading(false);
     }
+  }, []);
+
+  // Ville du profil par défaut, tant que l'utilisateur n'a rien saisi
+  const profileCity = cityFromProfile(profile.values);
+  useEffect(() => {
+    if (!profileCity || userTouched.current) return;
+    setCity(profileCity);
+    void runSearch(profileCity);
+  }, [profileCity, runSearch]);
+
+  const profileAqi = aqiFromProfile(profile.values);
+  const aqiBlocked =
+    profileAqi !== null &&
+    !!report &&
+    report.running.all.length > 0 &&
+    report.running.all.every((x) => x.aqi > profileAqi);
+
+  const search = () => {
+    userTouched.current = true;
+    void runSearch(city);
   };
+
   const current = report?.meteo.current,
     daily = report?.meteo.daily,
     description = current ? describeWeather(current.weather_code) : null;
@@ -50,14 +102,17 @@ export default function WeatherScreen() {
       <View style={s.search}>
         <TextInput
           value={city}
-          onChangeText={setCity}
-          onSubmitEditing={() => void search()}
+          onChangeText={(t) => {
+            userTouched.current = true;
+            setCity(t);
+          }}
+          onSubmitEditing={search}
           returnKeyType="search"
           placeholder="Rechercher une ville"
           placeholderTextColor={theme.colors.muted}
           style={s.input}
         />
-        <Pressable style={s.button} onPress={() => void search()}>
+        <Pressable style={s.button} onPress={search}>
           {loading ? (
             <ActivityIndicator color={theme.colors.bg} />
           ) : (
@@ -131,6 +186,14 @@ export default function WeatherScreen() {
             />
           </View>
           <Text style={s.section}>FENÊTRE DE COURSE</Text>
+          {aqiBlocked && (
+            <View style={s.alert}>
+              <Text style={s.alertText}>
+                Aucun critère AQI ne satisfait vos standards aujourd'hui pour
+                aller courir en extérieur. Vous pouvez modifier votre seuil AQI dans les paramètres de profil.
+              </Text>
+            </View>
+          )}
           <View style={s.running}>
             <Text style={s.runHead}>🏃 MEILLEURS CRÉNEAUX</Text>
             {report.running.best.length ? (
@@ -297,6 +360,20 @@ const s = StyleSheet.create({
     marginTop: 7,
   },
   metricDetail: { color: theme.colors.accent, fontSize: 9, marginTop: 2 },
+  alert: {
+    backgroundColor: "rgba(255, 59, 48, 0.12)",
+    borderWidth: 1,
+    borderColor: "#FF3B30",
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 11,
+  },
+  alertText: {
+    color: "#FF3B30",
+    fontSize: 12,
+    fontWeight: "700",
+    lineHeight: 18,
+  },
   running: {
     backgroundColor: theme.colors.panel,
     borderRadius: 18,
