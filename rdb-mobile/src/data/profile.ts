@@ -22,7 +22,9 @@ const headers: Record<string, string> = {
 
 function ensureConfigured() {
   if (!API_URL || !API_TOKEN) {
-    throw new Error("API non configurée : EXPO_PUBLIC_API_URL / EXPO_PUBLIC_API_TOKEN manquants");
+    throw new Error(
+      "API non configurée : EXPO_PUBLIC_API_URL / EXPO_PUBLIC_API_TOKEN manquants",
+    );
   }
 }
 
