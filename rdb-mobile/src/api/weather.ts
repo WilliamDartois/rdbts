@@ -69,7 +69,7 @@ export interface CityReport {
     hourly: Record<string, any>;
   };
   air: Record<string, any>;
-  running: { best: Slot[]; worst: Slot[] };
+  running: { best: Slot[]; worst: Slot[], all: Slot[] };
 }
 async function json<T>(url: string, p: Record<string, string>): Promise<T> {
   const r = await fetch(`${url}?${new URLSearchParams(p)}`);
@@ -138,6 +138,7 @@ export const splitBestWorst = (r: Slot[], n = 3) => ({
     .reverse()
     .filter((s) => !r.slice(0, n).includes(s))
     .slice(0, n),
+  all: r,
 });
 const range = (s: Slot) =>
     `${s.hour.slice(0, 2)}h-${String((+s.hour.slice(0, 2) + 1) % 24).padStart(2, "0")}h`,
