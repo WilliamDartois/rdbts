@@ -25,6 +25,7 @@ function authenticate(req: Request, res: Response, next: NextFunction): void {
   next();
 }
 app.use('/workouts', authenticate);
+app.use('/profile', authenticate);
 
 const datePattern = /^\d{4}-\d{2}-\d{2}$/;
 const optionalDate = (value: unknown): value is string => typeof value === 'string' && datePattern.test(value);
@@ -226,3 +227,66 @@ const server = app.listen(port, '0.0.0.0', () => console.log(`RDB API listening 
 async function shutdown(): Promise<void> { server.close(); await pool.end(); }
 process.on('SIGINT', () => { void shutdown(); });
 process.on('SIGTERM', () => { void shutdown(); });
+
+
+const levels = ['Débutant', 'Intermédiaire', 'Avancé'];
+
+const profileSelect = `
+  SELECT first_name, age, height_cm, weight_kg, max_hr, goal, level, updated_at
+  FROM profile WHERE user_id = $1`;
+
+function toProfile(row: Record<string, any> | undefined) {
+  if (!row) return { firstName: '', age: '', heightCm: '', weightKg: '', maxHr: '', goal: '', level: 'Débutant', updatedAt: null };
+  return {
+    firstName: row.first_name ?? '',
+    age: row.age == null ? '' : String(row.age),
+    heightCm: row.height_cm == null ? '' : String(row.height_cm),
+    weightKg: row.weight_kg == null ? '' : String(row.weight_kg),
+    maxHr: row.max_hr == null ? '' : String(row.max_hr),
+    goal: row.goal ?? '',
+    level: row.level ?? 'Débutant',
+    updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at ?? null,
+  };
+}
+
+app.get('/profile', async (_req, res, next): Promise<void> => {
+  try {
+    const result = await pool.query(profileSelect, [userId]);
+    res.json(toProfile(result.rows[0]));
+  } catch (error) { next(error); }
+});
+
+app.put('/profile', async (req, res, next): Promise<void> => {
+  const p = req.body as Record<string, unknown> | null;
+  if (!p || typeof p !== 'object') { res.status(400).json({ error: 'Invalid profile' }); return; }
+  const num = (v: unknown, min: number, max: number): number | null | undefined => {
+    if (v === undefined || v === null || v === '') return null;
+    const n = typeof v === 'number' ? v : Number(String(v).replace(',', '.'));
+    return Number.isFinite(n) && n >= min && n <= max ? n : undefined;
+  };
+  const firstName = optionalText(p.firstName);
+  const goal = optionalText(p.goal);
+  const age = num(p.age, 5, 100);
+  const heightCm = num(p.heightCm, 100, 250);
+  const weightKg = num(p.weightKg, 30, 250);
+  const maxHr = num(p.maxHr, 100, 230);
+  const level = typeof p.level === 'string' && levels.includes(p.level) ? p.level : undefined;
+  if ([firstName, goal, age, heightCm, weightKg, maxHr, level].includes(undefined)) {
+    res.status(400).json({ error: 'Invalid profile field' });
+    return;
+  }
+  try {
+    await pool.query(
+      `INSERT INTO profile (user_id, first_name, age, height_cm, weight_kg, max_hr, goal, level, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8, now())
+       ON CONFLICT (user_id) DO UPDATE SET
+         first_name=EXCLUDED.first_name, age=EXCLUDED.age, height_cm=EXCLUDED.height_cm,
+         weight_kg=EXCLUDED.weight_kg, max_hr=EXCLUDED.max_hr, goal=EXCLUDED.goal,
+         level=EXCLUDED.level, updated_at=now()`,
+      [userId, firstName, age != null ? Math.round(age) : null, heightCm, weightKg,
+       maxHr != null ? Math.round(maxHr) : null, goal, level]
+    );
+    const saved = await pool.query(profileSelect, [userId]);
+    res.json(toProfile(saved.rows[0]));
+  } catch (error) { next(error); }
+});
