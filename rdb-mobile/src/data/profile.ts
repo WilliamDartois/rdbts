@@ -12,15 +12,22 @@ export type ProfileData = {
 
 export const EMPTY_PROFILE: ProfileData = { columns: [], values: {} };
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL;
-const API_TOKEN = process.env.EXPO_PUBLIC_API_TOKEN;
+const API_URL = (process.env.EXPO_PUBLIC_API_URL ?? "").replace(/\/+$/, "");
+const API_TOKEN = process.env.EXPO_PUBLIC_API_TOKEN ?? "";
 
-const headers = {
+const headers: Record<string, string> = {
   "Content-Type": "application/json",
-  Authorization: `Bearer ${API_TOKEN}`,
+  ...(API_TOKEN ? { Authorization: `Bearer ${API_TOKEN}` } : {}),
 };
 
+function ensureConfigured() {
+  if (!API_URL || !API_TOKEN) {
+    throw new Error("API non configurée : EXPO_PUBLIC_API_URL / EXPO_PUBLIC_API_TOKEN manquants");
+  }
+}
+
 export async function fetchProfile(): Promise<ProfileData> {
+  ensureConfigured();
   const res = await fetch(`${API_URL}/profile`, { headers });
   if (!res.ok) throw new Error(`profile ${res.status}`);
   return res.json();
@@ -29,6 +36,7 @@ export async function fetchProfile(): Promise<ProfileData> {
 export async function saveProfile(
   values: Record<string, any>,
 ): Promise<ProfileData> {
+  ensureConfigured();
   const res = await fetch(`${API_URL}/profile`, {
     method: "PUT",
     headers,
