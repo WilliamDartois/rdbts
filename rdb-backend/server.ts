@@ -219,17 +219,6 @@ app.delete('/workouts/:id', async (req, res, next): Promise<void> => {
   } catch (error) { next(error); }
 });
 
-app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
-  console.error(error);
-  res.status(500).json({ error: 'Internal server error' });
-});
-const server = app.listen(port, '0.0.0.0', () => console.log(`RDB API listening on 0.0.0.0:${port}`));
-async function shutdown(): Promise<void> { server.close(); await pool.end(); }
-process.on('SIGINT', () => { void shutdown(); });
-process.on('SIGTERM', () => { void shutdown(); });
-
-
-const DEFAULT_USER_ID = 1
 // Colonnes que l'app ne doit jamais modifier
 const PROTECTED = new Set(["id", "user_id", "created_at", "updated_at"]);
 
@@ -248,39 +237,48 @@ async function getProfileColumns() {
   }));
 }
 
-app.get("/profile", async (req, res) => {
+app.get("/profile", async (_req, res, next) => {
   try {
     const columns = await getProfileColumns();
-    const { rows } = await pool.query(
-      "SELECT * FROM profile WHERE user_id = $1",
-      [DEFAULT_USER_ID],
-    );
+    const { rows } = await pool.query("SELECT * FROM profile WHERE user_id = $1", [userId]);
     res.json({ columns, values: rows[0] ?? {} });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: "profile_read_failed" });
-  }
+  } catch (error) { next(error); }
 });
 
-app.put("/profile", async (req, res) => {
+app.put("/profile", async (req, res, next) => {
   try {
     const columns = await getProfileColumns();
     const editable = columns.filter((c) => c.editable).map((c) => c.name);
-    const body = req.body ?? {};
-    // On ne garde que les colonnes réellement présentes et modifiables
+    const body = (req.body ?? {}) as Record<string, unknown>;
     const keys = Object.keys(body).filter((k) => editable.includes(k));
-    if (keys.length === 0) return res.status(400).json({ error: "no_fields" });
-
-    const sets = keys.map((k, i) => `"${k}" = $${i + 2}`).join(", ");
+    if (keys.length === 0) {
+      res.status(400).json({ error: "no_fields" });
+      return;
+    }
+    const colSql = keys.map((k) => `"${k}"`).join(", ");
+    const placeholders = keys.map((_, i) => `$${i + 2}`).join(", ");
+    const updateSql = keys.map((k) => `"${k}" = EXCLUDED."${k}"`).join(", ");
+    const hasUpdatedAt = columns.some((c) => c.name === "updated_at");
     const values = keys.map((k) => (body[k] === "" ? null : body[k]));
+
     const { rows } = await pool.query(
-      `UPDATE profile SET ${sets} WHERE user_id = $1 RETURNING *`,
-      [DEFAULT_USER_ID, ...values],
+      `INSERT INTO profile (user_id, ${colSql})
+       VALUES ($1, ${placeholders})
+       ON CONFLICT (user_id) DO UPDATE SET ${updateSql}${hasUpdatedAt ? ", updated_at = now()" : ""}
+       RETURNING *`,
+      [userId, ...values],
     );
     res.json({ columns, values: rows[0] ?? {} });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: "profile_update_failed" });
-  }
+  } catch (error) { next(error); }
 });
+
+app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  console.error(error);
+  res.status(500).json({ error: 'Internal server error' });
+});
+const server = app.listen(port, '0.0.0.0', () => console.log(`RDB API listening on 0.0.0.0:${port}`));
+async function shutdown(): Promise<void> { server.close(); await pool.end(); }
+process.on('SIGINT', () => { void shutdown(); });
+process.on('SIGTERM', () => { void shutdown(); });
+
 
