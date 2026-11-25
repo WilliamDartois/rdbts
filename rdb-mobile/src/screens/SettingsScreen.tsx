@@ -1,21 +1,40 @@
-import React from "react";
+import React, { useState } from "react";
 import { View, Text, Pressable, StyleSheet, Alert } from "react-native";
 import { theme } from "../theme";
+import ProfileScreen from "./ProfileScreen";
+import { useProfile } from "../data/useProfile";
+
 export default function SettingsScreen({ onLogout }: { onLogout: () => void }) {
+  const [showProfile, setShowProfile] = useState(false);
+  // Se rafraîchit depuis la table profile (en pause quand l'écran d'édition est ouvert).
+  const { profile } = useProfile(15000, showProfile);
+
+  if (showProfile) {
+    return <ProfileScreen onBack={() => setShowProfile(false)} />;
+  }
+
+const firstName = String(profile.values.first_name ?? "").trim();
+const initial = firstName ? firstName.charAt(0).toUpperCase() : "R";
+
   return (
     <View style={s.root}>
       <Text style={s.kicker}>PRÉFÉRENCES</Text>
       <Text style={s.title}>Paramètres</Text>
-      <View style={s.card}>
+      <Pressable
+        style={({ pressed }) => [s.card, pressed && { opacity: 0.7 }]}
+        onPress={() => setShowProfile(true)}
+      >
         <View style={s.avatar}>
-          <Text style={s.avatarText}>R</Text>
+          <Text style={s.avatarText}>{initial}</Text>
         </View>
         <View style={{ flex: 1 }}>
           <Text style={s.name}>Profil sportif</Text>
-          <Text style={s.sub}>Compte local · Running manager</Text>
+          <Text style={s.sub}>
+            {firstName ? firstName : "Compléter mon profil"}
+          </Text>
         </View>
         <Text style={s.chev}>›</Text>
-      </View>
+      </Pressable>
       <View style={s.note}>
         <Text style={s.noteTitle}>Données sur cet appareil</Text>
         <Text style={s.noteText}>
