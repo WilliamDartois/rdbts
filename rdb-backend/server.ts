@@ -229,64 +229,58 @@ process.on('SIGINT', () => { void shutdown(); });
 process.on('SIGTERM', () => { void shutdown(); });
 
 
-const levels = ['Débutant', 'Intermédiaire', 'Avancé'];
+const DEFAULT_USER_ID = 1
+// Colonnes que l'app ne doit jamais modifier
+const PROTECTED = new Set(["id", "user_id", "created_at", "updated_at"]);
 
-const profileSelect = `
-  SELECT first_name, age, height_cm, weight_kg, max_hr, goal, level, updated_at
-  FROM profile WHERE user_id = $1`;
-
-function toProfile(row: Record<string, any> | undefined) {
-  if (!row) return { firstName: '', age: '', heightCm: '', weightKg: '', maxHr: '', goal: '', level: 'Débutant', updatedAt: null };
-  return {
-    firstName: row.first_name ?? '',
-    age: row.age == null ? '' : String(row.age),
-    heightCm: row.height_cm == null ? '' : String(row.height_cm),
-    weightKg: row.weight_kg == null ? '' : String(row.weight_kg),
-    maxHr: row.max_hr == null ? '' : String(row.max_hr),
-    goal: row.goal ?? '',
-    level: row.level ?? 'Débutant',
-    updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at ?? null,
-  };
+async function getProfileColumns() {
+  const { rows } = await pool.query(
+    `SELECT column_name, data_type, is_nullable
+       FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'profile'
+      ORDER BY ordinal_position`,
+  );
+  return rows.map((c) => ({
+    name: c.column_name as string,
+    type: c.data_type as string,
+    nullable: c.is_nullable === "YES",
+    editable: !PROTECTED.has(c.column_name),
+  }));
 }
 
-app.get('/profile', async (_req, res, next): Promise<void> => {
+app.get("/profile", async (req, res) => {
   try {
-    const result = await pool.query(profileSelect, [userId]);
-    res.json(toProfile(result.rows[0]));
-  } catch (error) { next(error); }
+    const columns = await getProfileColumns();
+    const { rows } = await pool.query(
+      "SELECT * FROM profile WHERE user_id = $1",
+      [DEFAULT_USER_ID],
+    );
+    res.json({ columns, values: rows[0] ?? {} });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "profile_read_failed" });
+  }
 });
 
-app.put('/profile', async (req, res, next): Promise<void> => {
-  const p = req.body as Record<string, unknown> | null;
-  if (!p || typeof p !== 'object') { res.status(400).json({ error: 'Invalid profile' }); return; }
-  const num = (v: unknown, min: number, max: number): number | null | undefined => {
-    if (v === undefined || v === null || v === '') return null;
-    const n = typeof v === 'number' ? v : Number(String(v).replace(',', '.'));
-    return Number.isFinite(n) && n >= min && n <= max ? n : undefined;
-  };
-  const firstName = optionalText(p.firstName);
-  const goal = optionalText(p.goal);
-  const age = num(p.age, 5, 100);
-  const heightCm = num(p.heightCm, 100, 250);
-  const weightKg = num(p.weightKg, 30, 250);
-  const maxHr = num(p.maxHr, 100, 230);
-  const level = typeof p.level === 'string' && levels.includes(p.level) ? p.level : undefined;
-  if ([firstName, goal, age, heightCm, weightKg, maxHr, level].includes(undefined)) {
-    res.status(400).json({ error: 'Invalid profile field' });
-    return;
-  }
+app.put("/profile", async (req, res) => {
   try {
-    await pool.query(
-      `INSERT INTO profile (user_id, first_name, age, height_cm, weight_kg, max_hr, goal, level, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8, now())
-       ON CONFLICT (user_id) DO UPDATE SET
-         first_name=EXCLUDED.first_name, age=EXCLUDED.age, height_cm=EXCLUDED.height_cm,
-         weight_kg=EXCLUDED.weight_kg, max_hr=EXCLUDED.max_hr, goal=EXCLUDED.goal,
-         level=EXCLUDED.level, updated_at=now()`,
-      [userId, firstName, age != null ? Math.round(age) : null, heightCm, weightKg,
-       maxHr != null ? Math.round(maxHr) : null, goal, level]
+    const columns = await getProfileColumns();
+    const editable = columns.filter((c) => c.editable).map((c) => c.name);
+    const body = req.body ?? {};
+    // On ne garde que les colonnes réellement présentes et modifiables
+    const keys = Object.keys(body).filter((k) => editable.includes(k));
+    if (keys.length === 0) return res.status(400).json({ error: "no_fields" });
+
+    const sets = keys.map((k, i) => `"${k}" = $${i + 2}`).join(", ");
+    const values = keys.map((k) => (body[k] === "" ? null : body[k]));
+    const { rows } = await pool.query(
+      `UPDATE profile SET ${sets} WHERE user_id = $1 RETURNING *`,
+      [DEFAULT_USER_ID, ...values],
     );
-    const saved = await pool.query(profileSelect, [userId]);
-    res.json(toProfile(saved.rows[0]));
-  } catch (error) { next(error); }
+    res.json({ columns, values: rows[0] ?? {} });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "profile_update_failed" });
+  }
 });
+
