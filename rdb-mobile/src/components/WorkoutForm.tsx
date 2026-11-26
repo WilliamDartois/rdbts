@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   Modal,
   View,
@@ -15,9 +15,14 @@ import {
   Workout,
   WorkoutType,
   Intensity,
-  typeLabels,
   intensityLabels,
 } from "../data/workouts";
+import {
+  Activity,
+  ExerciseOption,
+  fetchActivities,
+  fetchExercises,
+} from "../data/activities";
 import { theme } from "../theme";
 const types: Object[] = [];
 void types;
@@ -101,12 +106,40 @@ export function WorkoutForm({
     [detailDuration, setDetailDuration] = useState(""),
     [pace, setPace] = useState(""),
     [rest, setRest] = useState(""),
-    [detailNotes, setDetailNotes] = useState("");
+    [detailNotes, setDetailNotes] = useState(""),
+    [activities, setActivities] = useState<Activity[]>([]),
+    [activity, setActivity] = useState<Activity | null>(null),
+    [exerciseOptions, setExerciseOptions] = useState<ExerciseOption[]>([]),
+    [loadingEx, setLoadingEx] = useState(false);
+
+  useEffect(() => {
+    if (!visible) return;
+    fetchActivities()
+      .then(setActivities)
+      .catch(() => setActivities([]));
+  }, [visible]);
+
+  const pickActivity = async (a: Activity) => {
+    setActivity(a);
+    setExercise("");
+    setExerciseOptions([]);
+    setLoadingEx(true);
+    try {
+      setExerciseOptions(await fetchExercises(a.id));
+    } catch {
+      setExerciseOptions([]);
+    } finally {
+      setLoadingEx(false);
+    }
+  };
+
   const reset = () => {
     setStep(1);
     setTitle("");
     setType("running");
     setExercise("");
+    setActivity(null);
+    setExerciseOptions([]);
     setOutdoor(true);
     setUseTime(false);
     setTime("18:00");
@@ -132,7 +165,7 @@ export function WorkoutForm({
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       date,
       title: title.trim(),
-      type,
+      activityId: activity?.id,
       exercise: exercise.trim() || undefined,
       outdoor,
       startTime: useTime ? time : undefined,
@@ -203,28 +236,52 @@ export function WorkoutForm({
                     onChange={setTitle}
                     placeholder="Ex. : Footing endurance"
                   />
-                  <Text style={s.fieldLabel}>TYPE</Text>
-                  <View style={s.chips}>
-                    {typesList.map((t) => (
-                      <Chip
-                        key={t}
-                        label={typeLabels[t]}
-                        selected={type === t}
-                        onPress={() => {
-                          setType(t);
-                          setOutdoor(t === "running" || t === "cycling");
-                        }}
-                      />
-                    ))}
-                  </View>
                   {type !== "rest" && (
                     <>
-                      <Field
-                        label="EXERCICE (facultatif)"
-                        value={exercise}
-                        onChange={setExercise}
-                        placeholder="Ex. : Squat, sortie longue…"
-                      />
+                      <Text style={s.fieldLabel}>ACTIVITÉ</Text>
+                      <View style={s.chips}>
+                        {activities.length === 0 ? (
+                          <Text style={s.sub}>Aucune activité disponible</Text>
+                        ) : (
+                          activities.map((a) => (
+                            <Chip
+                              key={a.id}
+                              label={a.name}
+                              selected={activity?.id === a.id}
+                              onPress={() => pickActivity(a)}
+                            />
+                          ))
+                        )}
+                      </View>
+
+                      {activity && (
+                        <>
+                          <Text style={s.fieldLabel}>EXERCICE</Text>
+                          {loadingEx ? (
+                            <Text style={[s.sub, { marginBottom: 16 }]}>
+                              Chargement…
+                            </Text>
+                          ) : exerciseOptions.length === 0 ? (
+                            <Text style={[s.sub, { marginBottom: 16 }]}>
+                              Aucun exercice pour cette activité
+                            </Text>
+                          ) : (
+                            <View style={s.chips}>
+                              {exerciseOptions.map((e) => (
+                                <Chip
+                                  key={e.id}
+                                  label={e.name}
+                                  selected={exercise === e.name}
+                                  onPress={() =>
+                                    setExercise(exercise === e.name ? "" : e.name)
+                                  }
+                                />
+                              ))}
+                            </View>
+                          )}
+                        </>
+                      )}
+
                       <View style={s.switchRow}>
                         <Text style={s.fieldLabel}>Séance en extérieur</Text>
                         <Switch

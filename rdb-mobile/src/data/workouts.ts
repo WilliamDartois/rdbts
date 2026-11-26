@@ -6,7 +6,6 @@ export interface Workout {
   id: string;
   date: string;
   title: string;
-  type: WorkoutType;
   exercise?: string;
   outdoor: boolean;
   startTime?: string;
@@ -21,6 +20,7 @@ export interface Workout {
   paceSecPerKm?: number;
   restSec?: number;
   detailNotes?: string;
+  activityId?: number;
 }
 export interface WorkoutRepository {
   list(): Promise<Workout[]>;
@@ -112,14 +112,7 @@ export class LocalWorkoutRepository implements WorkoutRepository {
     }
   }
 }
-export const typeLabels: Record<WorkoutType, string> = {
-  running: "Course à pied",
-  strength: "Musculation",
-  cycling: "Vélo",
-  mobility: "Mobilité",
-  rest: "Repos",
-  other: "Autre",
-};
+
 export const intensityLabels: Record<Exclude<Intensity, "">, string> = {
   easy: "Facile",
   moderate: "Modérée",
@@ -141,7 +134,6 @@ export const formatPace = (s?: number): string =>
   !s ? "" : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")} /km`;
 export const workoutSummary = (w: Workout): string =>
   [
-    typeLabels[w.type],
     w.exercise,
     w.durationMin && `${w.durationMin} min`,
     w.distanceKm && formatDistance(w.distanceKm),
