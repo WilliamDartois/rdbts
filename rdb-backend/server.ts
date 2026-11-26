@@ -26,6 +26,7 @@ function authenticate(req: Request, res: Response, next: NextFunction): void {
 }
 app.use('/workouts', authenticate);
 app.use('/profile', authenticate);
+app.use('/activities', authenticate);
 
 const datePattern = /^\d{4}-\d{2}-\d{2}$/;
 const optionalDate = (value: unknown): value is string => typeof value === 'string' && datePattern.test(value);
@@ -48,6 +49,7 @@ const toNumber = (value: unknown): number | undefined => value == null ? undefin
 const workoutSelect = `
   SELECT w.id, w.client_id, w.workout_date, w.title, w.type, w.is_outdoor,
          w.planned_start, w.planned_duration_min, w.intensity, w.status, w.notes,
+         w.activity_id,
          wi.target_sets, wi.target_reps, wi.target_weight_kg,
          wi.target_distance_m, wi.target_duration_s, wi.target_pace_s_per_km,
          wi.rest_s, wi.notes AS detail_notes, e.name AS exercise
@@ -63,6 +65,7 @@ function toWorkout(row: Record<string, any>) {
     date: row.workout_date instanceof Date ? row.workout_date.toISOString().slice(0, 10) : String(row.workout_date).slice(0, 10),
     title: row.title,
     type: row.type,
+    activityId: row.activity_id == null ? undefined : Number(row.activity_id),
     exercise: row.exercise ?? undefined,
     outdoor: row.is_outdoor,
     startTime: row.planned_start == null ? undefined : String(row.planned_start).slice(0, 5),
@@ -80,6 +83,32 @@ function toWorkout(row: Record<string, any>) {
   };
 }
 
+// ---------- Activities & exercises ----------
+app.get('/activities', async (_req, res, next): Promise<void> => {
+  try {
+    const result = await pool.query(`SELECT id, name FROM activity ORDER BY name`);
+    res.json(result.rows.map((r) => ({ id: Number(r.id), name: r.name })));
+  } catch (error) { next(error); }
+});
+
+app.get('/activities/:id/exercises', async (req, res, next): Promise<void> => {
+  try {
+    const activityId = Number(req.params.id);
+    if (!Number.isSafeInteger(activityId) || activityId < 1) {
+      res.status(400).json({ error: 'Invalid activity id' });
+      return;
+    }
+    const result = await pool.query(
+      `SELECT id, name FROM exercise
+        WHERE activity_id = $1 AND (user_id IS NULL OR user_id = $2)
+        ORDER BY name`,
+      [activityId, userId]
+    );
+    res.json(result.rows.map((r) => ({ id: Number(r.id), name: r.name })));
+  } catch (error) { next(error); }
+});
+
+// ---------- Workouts ----------
 app.get('/workouts', async (req, res, next): Promise<void> => {
   try {
     const from = req.query.from;
@@ -119,17 +148,19 @@ app.post('/workouts', async (req, res, next): Promise<void> => {
   const paceSecPerKm = optionalNumber(w.paceSecPerKm);
   const restSec = optionalNumber(w.restSec);
   const exercise = optionalText(w.exercise);
+  const activityId = optionalNumber(w.activityId);
   const invalidNumbers = [
     [durationMin, 1, 2147483647, true],
     [sets, 1, 32767, true], [reps, 1, 32767, true],
     [weightKg, 0, 9999.99, false], [distanceKm, 0, 2147483.647, false],
     [durationSec, 0, 2147483647, true], [paceSecPerKm, 1, 2147483647, true],
     [restSec, 0, 2147483647, true],
+    [activityId, 1, Number.MAX_SAFE_INTEGER, true],
   ].some(([value, min, max, integer]) => typeof value === 'number' &&
     (value < (min as number) || value > (max as number) ||
      (integer === true && !Number.isInteger(value))));
   if ([startTime, notes, detailNotes, durationMin, sets, reps, weightKg, distanceKm,
-       durationSec, paceSecPerKm, restSec, exercise].includes(undefined) ||
+       durationSec, paceSecPerKm, restSec, exercise, activityId].includes(undefined) ||
       (intensity !== null && (typeof intensity !== 'string' || !intensities.includes(intensity))) ||
       (typeof startTime === 'string' && !/^([01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/.test(startTime)) ||
       invalidNumbers) {
@@ -144,15 +175,16 @@ app.post('/workouts', async (req, res, next): Promise<void> => {
     const result = await client.query(
       `INSERT INTO workout
          (client_id, user_id, workout_date, title, type, is_outdoor, planned_start,
-          planned_duration_min, intensity, status, notes)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'planned',$10)
+          planned_duration_min, intensity, status, notes, activity_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'planned',$10,$11)
        ON CONFLICT (user_id, client_id) WHERE client_id IS NOT NULL
        DO UPDATE SET workout_date=EXCLUDED.workout_date, title=EXCLUDED.title,
          type=EXCLUDED.type, is_outdoor=EXCLUDED.is_outdoor,
          planned_start=EXCLUDED.planned_start, planned_duration_min=EXCLUDED.planned_duration_min,
-         intensity=EXCLUDED.intensity, status='planned', notes=EXCLUDED.notes
+         intensity=EXCLUDED.intensity, status='planned', notes=EXCLUDED.notes,
+         activity_id=EXCLUDED.activity_id
        RETURNING id`,
-      [w.id.trim(), userId, w.date, w.title.trim(), databaseType(w.type), w.outdoor, startTime ?? null, durationMin ?? null, intensity, notes ?? null]
+      [w.id.trim(), userId, w.date, w.title.trim(), databaseType(w.type), w.outdoor, startTime ?? null, durationMin ?? null, intensity, notes ?? null, activityId ?? null]
     );
     const workoutId: string = result.rows[0].id;
     const hasItem = Boolean(exercise || sets != null || reps != null || weightKg != null ||
@@ -170,9 +202,9 @@ app.post('/workouts', async (req, res, next): Promise<void> => {
         if (found.rowCount) exerciseId = found.rows[0].id;
         else {
           const inserted = await client.query(
-            `INSERT INTO exercise (user_id, name, category, is_outdoor)
-             VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING RETURNING id`,
-            [userId, exercise.trim(), databaseType(w.type), w.outdoor]
+            `INSERT INTO exercise (user_id, name, category, is_outdoor, activity_id)
+             VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING RETURNING id`,
+            [userId, exercise.trim(), databaseType(w.type), w.outdoor, activityId ?? null]
           );
           if (inserted.rowCount) exerciseId = inserted.rows[0].id;
           else {
@@ -219,6 +251,7 @@ app.delete('/workouts/:id', async (req, res, next): Promise<void> => {
   } catch (error) { next(error); }
 });
 
+// ---------- Profile ----------
 // Colonnes que l'app ne doit jamais modifier
 const PROTECTED = new Set(["id", "user_id", "created_at", "updated_at"]);
 
@@ -280,5 +313,3 @@ const server = app.listen(port, '0.0.0.0', () => console.log(`RDB API listening 
 async function shutdown(): Promise<void> { server.close(); await pool.end(); }
 process.on('SIGINT', () => { void shutdown(); });
 process.on('SIGTERM', () => { void shutdown(); });
-
-
