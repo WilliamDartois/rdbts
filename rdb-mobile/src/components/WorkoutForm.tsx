@@ -22,6 +22,22 @@ function Chip({ label, selected, onPress }: { label: string; selected: boolean; 
     <Text style={[s.chipText, selected && { color: theme.colors.bg }]}>{label}</Text>
   </Pressable>;
 }
+function CountChip({ label, count, onPress, onLongPress }: {
+  label: string; count: number; onPress: () => void; onLongPress: () => void;
+}) {
+  const selected = count > 0;
+  return (
+    <Pressable onPress={onPress} onLongPress={onLongPress} style={[s.chip, selected && s.chipOn]}>
+      <Text style={[s.chipText, selected && { color: theme.colors.bg }]}>{label}</Text>
+      {count > 1 && (
+        <View style={s.badge}>
+          <Text style={s.badgeText}>{count}</Text>
+        </View>
+      )}
+    </Pressable>
+  );
+}
+
 export function WorkoutForm({ visible, date, onClose, onSave }: {
   visible: boolean; date: string; onClose: () => void; onSave: (w: Workout) => void;
 }) {
@@ -30,7 +46,8 @@ export function WorkoutForm({ visible, date, onClose, onSave }: {
   const [activity, setActivity] = useState<Activity | null>(null);
   const [activities, setActivities] = useState<Activity[]>([]);
   const [exerciseOptions, setExerciseOptions] = useState<ExerciseOption[]>([]);
-  const [selectedExercises, setSelectedExercises] = useState<ExerciseOption[]>([]);
+  // const [selectedExercises, setSelectedExercises] = useState<ExerciseOption[]>([]);
+  const [counts, setCounts] = useState<Record<number, number>>({});
   const [loadingEx, setLoadingEx] = useState(false);
   const [outdoor, setOutdoor] = useState(true);
   const [useTime, setUseTime] = useState(false);
@@ -53,17 +70,43 @@ export function WorkoutForm({ visible, date, onClose, onSave }: {
 
   const pickActivity = async (a: Activity) => {
     setActivity(a);
-    setSelectedExercises([]);
+    setCounts({});            // ← remplace setSelectedExercises([])
     setExerciseOptions([]);
     setLoadingEx(true);
     try { setExerciseOptions(await fetchExercises(a.id)); }
     catch { setExerciseOptions([]); }
     finally { setLoadingEx(false); }
   };
-  const toggleExercise = (exercise: ExerciseOption) => {
-    setSelectedExercises((current) => current.some((e) => e.id === exercise.id)
-      ? current.filter((e) => e.id !== exercise.id) : [...current, exercise]);
-  };
+  // const toggleExercise = (exercise: ExerciseOption) => {
+  //   setSelectedExercises((current) => current.some((e) => e.id === exercise.id)
+  //     ? current.filter((e) => e.id !== exercise.id) : [...current, exercise]);
+  // };
+  // Tap = +1
+  const addExercise = (e: ExerciseOption) =>
+    setCounts((c) => ({ ...c, [e.id]: (c[e.id] ?? 0) + 1 }));
+
+  // Appui long = -1 (retire à 0)
+  const removeExercise = (e: ExerciseOption) =>
+    setCounts((c) => {
+      const n = (c[e.id] ?? 0) - 1;
+      const { [e.id]: _, ...rest } = c;
+      return n > 0 ? { ...rest, [e.id]: n } : rest;
+    });
+
+  // Liste dépliée (ex: Pompes x2 => [Pompes, Pompes]) pour save()
+  // const selectedExercises = exerciseOptions.flatMap((e) =>
+  //   Array(counts[e.id] ?? 0).fill(e)
+  // );
+  const selectedExercises: ExerciseOption[] = exerciseOptions.flatMap((e) =>
+    Array(counts[e.id] ?? 0).fill(e)
+  );
+
+  // Ex: "(2 × 400m) + (3 × 800m)"
+  const summary = exerciseOptions
+    .filter((e) => (counts[e.id] ?? 0) > 0)
+    .map((e) => `(${counts[e.id]} × ${e.name})`)
+    .join(" + ");
+
   const reset = () => {
     setStep(1); setTitle(""); setActivity(null); setExerciseOptions([]); setSelectedExercises([]);
     setOutdoor(true); setUseTime(false); setTime("18:00"); setDuration(""); setIntensity("");
@@ -110,14 +153,6 @@ export function WorkoutForm({ visible, date, onClose, onSave }: {
                 {activities.length === 0 ? <Text style={s.sub}>Aucune activité disponible</Text> : activities.map((a) =>
                   <Chip key={a.id} label={a.name} selected={activity?.id === a.id} onPress={() => pickActivity(a)} />)}
               </View>
-              {activity && <>
-                <Text style={s.fieldLabel}>EXERCICES · SÉLECTION MULTIPLE</Text>
-                {loadingEx ? <Text style={[s.sub, { marginBottom: 16 }]}>Chargement…</Text>
-                  : exerciseOptions.length === 0 ? <Text style={[s.sub, { marginBottom: 16 }]}>Aucun exercice pour cette activité</Text>
-                  : <View style={s.chips}>{exerciseOptions.map((e) =>
-                    <Chip key={e.id} label={e.name} selected={selectedExercises.some((x) => x.id === e.id)} onPress={() => toggleExercise(e)} />)}</View>}
-                {!!selectedExercises.length && <Text style={[s.sub, { marginBottom: 12 }]}>{selectedExercises.length} exercice(s) sélectionné(s)</Text>}
-              </>}
               <View style={s.switchRow}><Text style={s.fieldLabel}>Séance en extérieur</Text>
                 <Switch value={outdoor} onValueChange={setOutdoor} trackColor={{ true: theme.colors.accentDark }} thumbColor={outdoor ? theme.colors.accent : theme.colors.muted} /></View>
               <View style={s.switchRow}><Text style={s.fieldLabel}>Définir une heure</Text>
@@ -129,8 +164,51 @@ export function WorkoutForm({ visible, date, onClose, onSave }: {
                 <Chip key={i} label={intensityLabels[i]} selected={intensity === i} onPress={() => setIntensity(intensity === i ? "" : i)} />)}</View>
               <Field label="NOTES" value={notes} onChange={setNotes} placeholder="Une précision…" />
             </> : <>
-              <Text style={s.summary}>{title} · {selectedExercises.map((e) => e.name).join(", ") || "Sans exercice associé"}</Text>
-              <View style={s.two}><View style={{ flex: 1 }}><Field label="SÉRIES" value={sets} onChange={setSets} keyboardType="numeric" /></View>
+              {/* <Text style={s.summary}>{title} · {selectedExercises.map((e) => e.name).join(", ") || "Sans exercice associé"}</Text> */}
+              <Text style={s.summary}>
+                {title}{activity ? ` · ${activity.name}` : ""}
+              </Text>
+
+              <Text style={s.fieldLabel}>
+                EXERCICES · {activity ? activity.name.toUpperCase() : "AUCUNE ACTIVITÉ"}
+              </Text>
+              {!activity ? (
+                <Text style={[s.sub, { marginBottom: 16 }]}>
+                  Retourne à l'étape 1 pour choisir une activité.
+                </Text>
+              ) : loadingEx ? (
+                <Text style={[s.sub, { marginBottom: 16 }]}>Chargement…</Text>
+              ) : exerciseOptions.length === 0 ? (
+                <Text style={[s.sub, { marginBottom: 16 }]}>Aucun exercice pour cette activité</Text>
+              ) : (
+                <View style={s.chips}>
+                  {exerciseOptions.map((e) => (
+                    <CountChip
+                      key={e.id}
+                      label={e.name}
+                      count={counts[e.id] ?? 0}
+                      onPress={() => addExercise(e)}
+                      onLongPress={() => removeExercise(e)}
+                    />
+                  ))}
+                  {/* {selectedExercises.length > 0 && (
+                    <Text style={[s.sub, { marginBottom: 12 }]}>
+                      {selectedExercises.length} exercice(s) · appui long pour retirer
+                    </Text>
+                  )} */}
+                  {summary !== "" && (
+                    <Text style={[s.sub, { marginBottom: 12 }]}>
+                      {summary}
+                    </Text>
+                  )}
+                </View>
+              )}
+              {/* {!!selectedExercises.length && (
+                <Text style={[s.sub, { marginBottom: 12 }]}>
+                  {selectedExercises.length} exercice(s) sélectionné(s)
+                </Text>
+              )} */}
+                            <View style={s.two}><View style={{ flex: 1 }}><Field label="SÉRIES" value={sets} onChange={setSets} keyboardType="numeric" /></View>
                 <View style={{ flex: 1 }}><Field label="RÉPÉTITIONS" value={reps} onChange={setReps} keyboardType="numeric" /></View></View>
               <View style={s.two}><View style={{ flex: 1 }}><Field label="CHARGE · KG" value={weight} onChange={setWeight} keyboardType="numeric" /></View>
                 <View style={{ flex: 1 }}><Field label="DISTANCE · KM" value={distance} onChange={setDistance} keyboardType="numeric" /></View></View>
@@ -139,6 +217,7 @@ export function WorkoutForm({ visible, date, onClose, onSave }: {
               <Field label="REPOS ENTRE SÉRIES · SEC" value={rest} onChange={setRest} keyboardType="numeric" />
               <Field label="NOTES" value={detailNotes} onChange={setDetailNotes} placeholder="Détails des exercices…" />
             </>}
+            
           </ScrollView>
           <View style={s.actions}>
             {step === 2 && <Pressable style={s.back} onPress={() => setStep(1)}><Text style={s.backText}>← Retour</Text></Pressable>}
@@ -256,4 +335,17 @@ const s = StyleSheet.create({
     marginBottom: 15,
   },
   two: { flexDirection: "row", gap: 10 },
+  badge: {
+      position: "absolute",
+      top: -8,
+      right: -8,
+      minWidth: 20,
+      height: 20,
+      borderRadius: 10,
+      paddingHorizontal: 5,
+      backgroundColor: "#ff5a3c",
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    badgeText: { color: "#fff", fontSize: 11, fontWeight: "700" },
 });
